@@ -4,6 +4,8 @@ Yerel yüz tanıma, seçilebilir el/mimik hareketleri ve uzaklaşınca otomatik 
 
 ![FaceUnlock yerel kontrol paneli](docs/screenshots/overview.png)
 
+**[Hazır Windows paketini indir](https://github.com/erdemirakif007-source/FaceUnlock/releases/tag/v0.1.0-preview.1)** · Python gerekmez. ZIP'i tamamen çıkar, `FaceUnlock.cmd` dosyasını aç ve Kurulum sekmesindeki adımları izle.
+
 **Deneysel bir Windows projesidir.** Standart RGB kamera kullanır; Windows Hello'nun donanım destekli yüz doğrulama seviyesinde değildir. Mevcut oturumun kilidini açar; ilk açılışta oturum açmayı desteklemez. PIN/parola girişi kullanılabilir kalır.
 
 ## Özellikler
