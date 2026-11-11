@@ -1,0 +1,86 @@
+name: Windows preview release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Preview release tag
+        required: true
+        default: v0.1.0-preview.1
+permissions:
+  contents: write
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build Windows components
+        shell: pwsh
+        run: |
+          .\build.cmd
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\build-agent.cmd
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify agent behavior and packaged executables
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:LOCALAPPDATA 'FaceUnlockBuild'
+          $python = Join-Path $root 'venv\Scripts\python.exe'
+          & $python -m unittest settings_smoke agent_smoke -v
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          foreach ($test in @('decision_smoke.py','adaptive_smoke.py','blink_smoke.py','camera_scan_smoke.py','snap_smoke.py')) {
+            & $python $test
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          foreach ($relative in @('FaceUnlock\FaceUnlock.exe','FaceUnlockAgent\FaceUnlockAgent.exe')) {
+            $report = Join-Path $root ([IO.Path]::GetFileNameWithoutExtension($relative) + '-check.json')
+            $process = Start-Process -FilePath (Join-Path $root "dist\$relative") -ArgumentList @('--self-test', ('"' + $report + '"')) -WindowStyle Hidden -PassThru
+            if (-not $process.WaitForExit(90000)) {
+              Stop-Process -Id $process.Id
+              throw "Packaged test timed out: $relative"
+            }
+            if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report)) {
+              throw "Packaged test failed: $relative"
+            }
+            $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            if (-not $result.ok -or $result.camera_opened) { throw 'Invalid self-test result' }
+            Get-Content -LiteralPath $report
+          }
+      - name: Package and publish preview
+        shell: pwsh
+        run: |
+          .\package.ps1 -SkipBuild
+          $archive = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'FaceUnlockBuild\releases\*.zip') | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $archive) { throw 'Release ZIP missing' }
+          $asset = Join-Path $env:RUNNER_TEMP 'FaceUnlock-Windows-x64.zip'
+          Copy-Item -LiteralPath $archive.FullName -Destination $asset
+          $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          $notes = @"
+          Turkish local desktop panel, face enrollment, six selectable gestures and configurable automatic session locking (5-3600 seconds).
+
+          Download and fully extract **FaceUnlock-Windows-x64.zip**, then open **FaceUnlock.cmd**. Prepare models, enroll your own face and choose your settings. No Python/compiler installation is needed. Windows unlock setup requires administrator approval and the Windows account password.
+
+          Behavior tests and packaged executable self-tests passed on the Windows build runner. Manual installation/reboot/lock-screen validation on different devices remains necessary. Experimental, unsigned preview; an RGB camera does not provide Windows Hello-level liveness verification. PIN/password sign-in remains available. No personal face data, configuration or passwords are included.
+
+          SHA-256: $hash
+          "@
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          Set-Content -LiteralPath $notesFile -Value $notes -Encoding utf8
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'FaceUnlock v0.1.0 Preview' --draft --prerelease --notes-file $notesFile
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          gh release upload $env:RELEASE_TAG $asset --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft=false --prerelease --notes-file $notesFile
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
